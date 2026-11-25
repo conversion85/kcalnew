@@ -1,4 +1,4 @@
-/* KCAL 2.1: Barcode scan and public product lookup – no telemetry. */
+/* KCAL 2.3: Barcode scan and public product lookup – no telemetry. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -22,6 +22,7 @@
   let requestGeneration = 0;
   let currentProduct = null;
   let lastScanCode = '';
+  let detectionTimer;
   let barcodeLibraryPromise = null;
   const productCache = new Map();
 
@@ -111,8 +112,9 @@
       return;
     }
     barcodeInput.value = code;
-    await stopCamera();
+    setStatus(`Barcode ${code} erkannt – Produkt wird gesucht …`);
     const generation = ++requestGeneration;
+    void stopCamera();
     const abortController = new AbortController();
     const timeout = setTimeout(() => abortController.abort(), 12000);
     lookupButton.disabled = true;
@@ -160,12 +162,13 @@
   }
   async function stopCamera() {
     ++scanGeneration;
+    clearTimeout(detectionTimer);
     scanning = false;
     opening = false;
     detectorActive = false;
     if (liveScanner) {
       const old = liveScanner; liveScanner = null;
-      try { await old.stop(); } catch { /* already stopped */ }
+      try { await Promise.race([old.stop(), new Promise(resolve => setTimeout(resolve, 1500))]); } catch { /* already stopped */ }
       try { old.clear(); } catch { /* ignore */ }
     }
     if (liveStream) {
@@ -173,6 +176,7 @@
       liveStream = null;
     }
     scannerStopped();
+    if (lookupButton.disabled) startButton.disabled = true;
   }
   function cameraError(error) {
     const name = error?.name || '';
@@ -186,7 +190,35 @@
     if (!validBarcode(code) || !scanning) return;
     scanning = false; // one scan only, no repeat API requests
     lastScanCode = code;
-    void lookup(code);
+    barcodeInput.value = code;
+    setStatus(`Barcode ${code} erkannt – Produkt wird gesucht …`, 'success');
+    try { navigator.vibrate?.(80); } catch {}
+    setTimeout(() => void lookup(code), 0);
+  }
+  async function optimizeFocus(video) {
+    const track = video?.srcObject?.getVideoTracks?.()[0];
+    if (!track?.applyConstraints) return;
+    const caps = track.getCapabilities?.() || {};
+    if (caps.focusMode?.includes('continuous')) {
+      try { await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }); } catch {}
+    }
+  }
+  async function parallelNative(gen, video) {
+    if (!video || !(await nativeSupported()) || gen !== scanGeneration) return;
+    let detector;
+    try { detector = new BarcodeDetector({ formats: nativeFormats }); } catch { return; }
+    const loop = async () => {
+      if (gen !== scanGeneration || !scanning) return;
+      try {
+        if (video.readyState >= 2) {
+          const matches = await detector.detect(video);
+          const match = matches.find(c => validBarcode(barcodeDigits(c.rawValue)));
+          if (match && gen === scanGeneration) onDetected(match.rawValue);
+        }
+      } catch {}
+      if (gen === scanGeneration && scanning) setTimeout(loop, 250);
+    };
+    void loop();
   }
   async function cameraNative(gen) {
     liveStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
@@ -196,6 +228,7 @@
     video.srcObject = liveStream;
     viewport.replaceChildren(video);
     await video.play();
+    void optimizeFocus(video);
     if (gen !== scanGeneration) return;
     const detector = new BarcodeDetector({ formats: nativeFormats });
     detectorActive = true;
@@ -205,7 +238,8 @@
       try {
         if (video.readyState >= 2) {
           const codes = await detector.detect(video);
-          if (codes.length) { onDetected(codes[0].rawValue); if (!scanning) return; }
+          const match = codes.find(c => validBarcode(barcodeDigits(c.rawValue)));
+          if (match && gen === scanGeneration) { onDetected(match.rawValue); if (!scanning) return; }
         }
       } catch { /* camera frames can sporadically fail */ }
       if (gen === scanGeneration && scanning) setTimeout(loop, 130);
@@ -233,17 +267,21 @@
     const F = window.Html5QrcodeSupportedFormats;
     const scanner = new window.Html5Qrcode('scannerViewport', {
       formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E],
+      useBarCodeDetectorIfSupported: false,
       verbose: false
     });
     liveScanner = scanner;
     await scanner.start(
       { facingMode: 'environment' },
-      { fps: 10, qrbox: (w,h) => ({ width: Math.max(90, Math.min(Math.floor(w * .82), 310)), height: Math.max(65, Math.min(Math.floor(h * .5), 140)) }) },
-      decoded => onDetected(decoded),
+      { fps: 10, disableFlip: false, videoConstraints: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
+      decoded => { if (gen === scanGeneration) onDetected(decoded); },
       () => {}
     );
-    if (gen !== scanGeneration) { await stopCamera(); return; }
+    if (gen !== scanGeneration || !scanning) return;
     scannerReady();
+    const video = viewport.querySelector('video');
+    void optimizeFocus(video);
+    void parallelNative(gen, video);
   }
   async function startCamera() {
     if (opening || scanning) return;
@@ -258,8 +296,23 @@
     startButton.disabled = true;
     setStatus('Kamera wird gestartet …');
     try {
-      if (await nativeSupported()) await cameraNative(gen);
-      else await cameraWithLibrary(gen);
+      // Prefer the independent ZXing decoder, including on browsers exposing
+      // BarcodeDetector but failing to decode EAN camera frames.
+      try { await cameraWithLibrary(gen); }
+      catch (libraryError) {
+        if (gen !== scanGeneration || !scanning) return;
+        if (liveScanner) {
+          const old = liveScanner; liveScanner = null;
+          try { await old.stop(); } catch {}
+          try { old.clear(); } catch {}
+        }
+        if (!(await nativeSupported())) throw libraryError;
+        if (gen !== scanGeneration) return;
+        await cameraNative(gen);
+      }
+      if (gen === scanGeneration && scanning) detectionTimer = setTimeout(() => {
+        if (gen === scanGeneration && scanning) setStatus('Noch kein Barcode erkannt. Halte den vollständigen Strichcode ruhig und scharf ins Bild. Ändere den Abstand oder nutze ein Foto.');
+      }, 8000);
     } catch (error) {
       if (gen === scanGeneration) {
         await stopCamera();
@@ -277,6 +330,7 @@
         const bitmap = await createImageBitmap(file);
         let matches;
         try { matches = await new BarcodeDetector({ formats: nativeFormats }).detect(bitmap); }
+        catch { matches = []; }
         finally { bitmap.close(); }
         const match = matches.find(m => validBarcode(barcodeDigits(m.rawValue)));
         if (match) { await lookup(match.rawValue); return; }
@@ -285,7 +339,7 @@
       viewport.replaceChildren();
       const F = window.Html5QrcodeSupportedFormats;
       const imageScanner = new window.Html5Qrcode('scannerViewport', {
-        formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E], verbose: false
+        formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E], useBarCodeDetectorIfSupported: false, verbose: false
       });
       try {
         const code = await imageScanner.scanFile(file, false);
@@ -328,5 +382,15 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden) void stopCamera(); });
   window.addEventListener('pagehide', () => { void stopCamera(); });
   $('calorieForm').addEventListener('reset', () => { currentProduct = null; showResult(false); setStatus('Eingaben zurückgesetzt. Du kannst erneut einen Barcode scannen.'); });
+  $('focusScanner').addEventListener('click', async () => {
+    const video = viewport.querySelector('video');
+    const track = video?.srcObject?.getVideoTracks?.()[0];
+    const caps = track?.getCapabilities?.() || {};
+    if (caps.focusMode?.includes('single-shot')) {
+      try { await track.applyConstraints({ advanced: [{ focusMode: 'single-shot' }] }); } catch {}
+    }
+    await optimizeFocus(video);
+    if (scanning) setStatus('Halte den Barcode etwa 15–30 cm entfernt. Wenn er unscharf bleibt, vergrößere den Abstand.');
+  });
   stopButton.disabled = true;
 })();

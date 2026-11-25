@@ -43,7 +43,7 @@ html[data-theme="light"]{color-scheme:light;--bg:#f0f4f3;--sidebar:#f9fbf8;--sur
 .scanner-area{margin-top:15px;border:1px solid #4c6f5c;border-radius:14px;padding:10px;background:#101e20;overflow:hidden}
 .scanner-area[hidden],.barcode-product[hidden]{display:none!important}
 .scanner-viewport{min-height:180px;background:#121918;border-radius:9px;overflow:hidden;position:relative}
-.scanner-viewport video{display:block;width:100%;height:245px;object-fit:cover}
+.scanner-viewport video{display:block;width:100%;height:auto;max-height:420px;object-fit:contain}
 .scanner-guide{font-size:11px;color:#a9c1af;text-align:center;margin:9px auto 10px;line-height:1.5}
 .stop-scanner{width:100%;min-height:39px}
 .scanner-status{min-height:18px;color:#9db6a3;font-size:11px;line-height:1.5;margin-top:12px}

@@ -1,5 +1,5 @@
-const CACHE_NAME = 'kcal-v2.1-20261124';
-const ASSETS = ['./', './index.html', './style.css', './script.js', './scanner.js', './icon.svg', './icon-192.png', './icon-512.png', './manifest.webmanifest'];
+const CACHE_NAME = 'kcal-v2.3-20261125';
+const ASSETS = ['./', './index.html', './style.css', './script.js', './scanner.js?v=2.3', './scanner.js', './icon.svg', './icon-192.png', './icon-512.png', './manifest.webmanifest'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting()));
 });

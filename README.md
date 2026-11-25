@@ -1,4 +1,4 @@
-# KCAL 2.1 – mit Barcode-Scanner
+# KCAL 2.2 – Barcode-Scanner Fix
 
 Modernisierte Kalorien-App mit Lebensmittel-Barcode-Scanner und automatischem Abruf der Nährwerte aus **Open Food Facts** (offene Datenbank unter ODbL).
 
@@ -42,3 +42,9 @@ Wenn die App auf einer eigenen Website veröffentlicht wird, sind die tatsächli
 - Open Food Facts begrenzt lesende Produktabfragen (laut API-Dokumentation 15/min/IP). KCAL startet nur bei aktivem Scan/Lookup eine einzelne Produktabfrage und vermeidet doppelte API-Aufrufe in derselben Sitzung.
 - Camera-Berechtigungen unterscheiden sich nach Gerät, Browser und System. Den Scanner vor Veröffentlichung auf dem Zielgerät testen.
 - Das Web-Frontend benötigt für den automatischen API-Abruf eine aktive Internetverbindung. Ein direkter lokaler `file://`-Aufruf ist nur für den Offline-Rechner geeignet.
+
+## Version 2.2
+Die Kamera nutzt bevorzugt html5-qrcode mit ZXing statt der nativen BarcodeDetector-API. Das gesamte Kamerabild wird durchsucht. Die erkannte Nummer wird sofort angezeigt und die Produktsuche startet ohne auf das Schließen der Kamera zu warten. Für den Decoder-Download und die Produktsuche wird Internet benötigt.
+
+## Version 2.3
+Autofokus falls unterstützt, höhere angeforderte Kameraauflösung, parallele native Erkennung falls verfügbar. Smartphone-Livetest erforderlich.
