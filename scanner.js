@@ -1,4 +1,4 @@
-/* KCAL 2.3: Barcode scan and public product lookup – no telemetry. */
+/* KCAL 2.4: Barcode scan and public product lookup – no telemetry. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -221,29 +221,31 @@
     void loop();
   }
   async function cameraNative(gen) {
-    liveStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+    liveStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
     if (gen !== scanGeneration) { liveStream.getTracks().forEach(t => t.stop()); liveStream = null; return; }
     const video = document.createElement('video');
-    video.setAttribute('playsinline', ''); video.muted = true; video.autoplay = true;
+    video.setAttribute('playsinline', ''); video.setAttribute('webkit-playsinline', ''); video.playsInline = true; video.muted = true; video.autoplay = true;
     video.srcObject = liveStream;
     viewport.replaceChildren(video);
     await video.play();
     void optimizeFocus(video);
     if (gen !== scanGeneration) return;
-    const detector = new BarcodeDetector({ formats: nativeFormats });
-    detectorActive = true;
     scannerReady();
-    const loop = async () => {
-      if (gen !== scanGeneration || !scanning || !detectorActive) return;
+    const canvas = document.createElement('canvas');
+    let frames = 0, previous = '', repeats = 0;
+    const loop = () => {
+      if (gen !== scanGeneration || !scanning) return;
       try {
         if (video.readyState >= 2) {
-          const codes = await detector.detect(video);
-          const match = codes.find(c => validBarcode(barcodeDigits(c.rawValue)));
-          if (match && gen === scanGeneration) { onDetected(match.rawValue); if (!scanning) return; }
+          frames++;
+          const code = window.KcalEAN.frame(video, canvas);
+          if (code) { repeats = code === previous ? repeats + 1 : 1; previous = code; if (repeats >= 2) { onDetected(code); return; } }
+          if (frames % 12 === 0) setStatus(`Scan aktiv · ${frames} Bilder geprüft · Barcode waagerecht halten, Abstand variieren.`);
         }
-      } catch { /* camera frames can sporadically fail */ }
-      if (gen === scanGeneration && scanning) setTimeout(loop, 130);
+      } catch (error) { setStatus('Bildauswertung fehlgeschlagen: ' + error.message, 'error'); }
+      if (gen === scanGeneration && scanning) setTimeout(loop, 180);
     };
+    void parallelNative(gen, video);
     void loop();
   }
   function loadScannerLibrary() {
@@ -296,20 +298,7 @@
     startButton.disabled = true;
     setStatus('Kamera wird gestartet …');
     try {
-      // Prefer the independent ZXing decoder, including on browsers exposing
-      // BarcodeDetector but failing to decode EAN camera frames.
-      try { await cameraWithLibrary(gen); }
-      catch (libraryError) {
-        if (gen !== scanGeneration || !scanning) return;
-        if (liveScanner) {
-          const old = liveScanner; liveScanner = null;
-          try { await old.stop(); } catch {}
-          try { old.clear(); } catch {}
-        }
-        if (!(await nativeSupported())) throw libraryError;
-        if (gen !== scanGeneration) return;
-        await cameraNative(gen);
-      }
+      await cameraNative(gen);
       if (gen === scanGeneration && scanning) detectionTimer = setTimeout(() => {
         if (gen === scanGeneration && scanning) setStatus('Noch kein Barcode erkannt. Halte den vollständigen Strichcode ruhig und scharf ins Bild. Ändere den Abstand oder nutze ein Foto.');
       }, 8000);
@@ -326,6 +315,12 @@
     await stopCamera();
     setStatus('Barcode wird im Bild gesucht …');
     try {
+      const url = URL.createObjectURL(file);
+      try {
+        const img = new Image(); img.src = url; await img.decode();
+        const localCode = window.KcalEAN.frame(img, document.createElement('canvas'));
+        if (localCode) { await lookup(localCode); return; }
+      } catch {} finally { URL.revokeObjectURL(url); }
       if (await nativeSupported() && 'createImageBitmap' in window) {
         const bitmap = await createImageBitmap(file);
         let matches;
